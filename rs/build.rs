@@ -13,7 +13,6 @@ fn main() {
         // Compile CUDA to PTX
         let status = Command::new("nvcc")
             .args(&[
-                "-ccbin=C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.42.34433\\bin\\Hostx64\\x64\\cl.exe",
                 "--ptx",
                 "-arch=sm_50", // Minimum compute capability
                 "-o",
