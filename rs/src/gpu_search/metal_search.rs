@@ -332,8 +332,8 @@ impl GpuVanitySearch {
             let status = command_buffer.status();
             dbg_println!("GPU: Command buffer status: {:?}", status);
 
-            let error = command_buffer.error();
-            dbg_println!("GPU: Command buffer error: {:?}", error);
+            // let error = command_buffer.error();
+            // dbg_println!("GPU: Command buffer error: {:?}", error);
 
             if std::env::var("METAL_CAPTURE_ENABLED").is_ok() {
                 capture_scope.end_scope();
