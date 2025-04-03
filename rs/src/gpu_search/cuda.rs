@@ -251,10 +251,10 @@ impl GpuVanitySearch {
         self.current_device.set(next);
 
         let device = &self.devices[current];
-        println!(
-            "Using CUDA device {}: {}",
-            device.device_id, device.device_name
-        );
+        // println!(
+        //     "Using CUDA device {}: {}",
+        //     device.device_id, device.device_name
+        // );
 
         // Set this device's context as the current context
         if let Err(e) = CurrentContext::set_current(&device.context) {
@@ -411,10 +411,10 @@ impl GpuVanitySearch {
         self.current_device.set(next);
 
         let device = &self.devices[current];
-        println!(
-            "Using CUDA device {}: {}",
-            device.device_id, device.device_name
-        );
+        // println!(
+        //     "Using CUDA device {}: {}",
+        //     device.device_id, device.device_name
+        // );
 
         // Set this device's context as the current context
         if let Err(e) = CurrentContext::set_current(&device.context) {
