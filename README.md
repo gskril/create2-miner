@@ -8,6 +8,7 @@ Clone the repo and checkout to this branch
 
 ```bash
 git clone https://github.com/gskril/create2-miner.git
+cd create2-miner
 git checkout create2-cuda
 ```
 
@@ -22,6 +23,6 @@ export PREFIX=00000000
 Run the program
 
 ```bash
-cd create2-miner/rs
+cd rs
 cargo run -- create2 $FACTORY $INIT_CODE_HASH $PREFIX --gpu.threads 256 --gpu.thread-groups 131072
 ```
