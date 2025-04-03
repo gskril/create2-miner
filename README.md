@@ -19,6 +19,6 @@ export PREFIX=00000000
 Run the program
 
 ```bash
-cd rs
+cd create2-miner/rs
 cargo run -- create2 $FACTORY $INIT_CODE_HASH $PREFIX --gpu.threads 256 --gpu.thread-groups 131072
 ```
