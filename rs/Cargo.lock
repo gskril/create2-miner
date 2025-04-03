@@ -524,7 +524,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "create3"
+name = "create-miner"
 version = "0.1.0"
 dependencies = [
  "alloy-primitives",

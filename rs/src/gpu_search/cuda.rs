@@ -1,8 +1,8 @@
-use rustacuda::prelude::*;
-use rustacuda::memory::DeviceBuffer;
 use rustacuda::launch;
-use std::ffi::CString;
+use rustacuda::memory::DeviceBuffer;
+use rustacuda::prelude::*;
 use std::cell::Cell;
+use std::ffi::CString;
 use std::sync::Arc;
 
 pub struct GpuVanitySearch {
@@ -34,7 +34,10 @@ impl GpuVanitySearch {
 
         println!("Found CUDA device: {}", device.name().unwrap());
 
-        let context = match Context::create_and_push(ContextFlags::MAP_HOST | ContextFlags::SCHED_AUTO, device) {
+        let context = match Context::create_and_push(
+            ContextFlags::MAP_HOST | ContextFlags::SCHED_AUTO,
+            device,
+        ) {
             Ok(ctx) => Arc::new(ctx),
             Err(e) => {
                 println!("Failed to create CUDA context: {}", e);
@@ -43,7 +46,7 @@ impl GpuVanitySearch {
         };
 
         // Load the CUDA module (compiled PTX)
-        let ptx = include_str!("../shader/Keccak256.ptx");
+        let ptx = include_str!("../shader/CREATE3.ptx");
         let ptx = CString::new(ptx).unwrap();
         let module = match Module::load_from_string(&ptx) {
             Ok(module) => module,
@@ -104,22 +107,21 @@ impl GpuVanitySearch {
         let mut prefix_buf = DeviceBuffer::from_slice(&prefix_bytes).unwrap();
         let prefix_len = prefix_bytes.len() as u32;
         let mut prefix_len_buf = DeviceBuffer::from_slice(&[prefix_len]).unwrap();
-        
+
         let ns_bytes = namespace.as_bytes();
         let mut ns_buf = DeviceBuffer::from_slice(ns_bytes).unwrap();
         let ns_len = ns_bytes.len() as u32;
         let mut ns_len_buf = DeviceBuffer::from_slice(&[ns_len]).unwrap();
-        
+
         let mut initial_salt_buf = DeviceBuffer::from_slice(initial_salt).unwrap();
         let mut result_salt = vec![0u8; 32];
         let mut result_salt_buf = DeviceBuffer::from_slice(&result_salt).unwrap();
         let mut found = vec![0i32; 1];
         let mut found_buf = DeviceBuffer::from_slice(&found).unwrap();
 
-
         let function_name = CString::new("vanity_search").unwrap();
         let function = self.module.get_function(&function_name).unwrap();
-        
+
         let start_time = std::time::Instant::now();
 
         unsafe {
@@ -135,16 +137,19 @@ impl GpuVanitySearch {
                     result_salt_buf.as_device_ptr(),
                     found_buf.as_device_ptr()
                 )
-            ).unwrap();
+            )
+            .unwrap();
         }
 
         self.stream.synchronize().unwrap();
 
         let end_time = std::time::Instant::now();
         let duration = end_time.duration_since(start_time);
-        self.time_taken.set(self.time_taken.get() + duration.as_secs_f64());
-        self.iterations.set(self.iterations.get() + (thread_count * block_count) as u64);
-        
+        self.time_taken
+            .set(self.time_taken.get() + duration.as_secs_f64());
+        self.iterations
+            .set(self.iterations.get() + (thread_count * block_count) as u64);
+
         // Check if we found a result
         found_buf.copy_to(&mut found).unwrap();
 
@@ -189,7 +194,7 @@ impl Drop for GpuVanitySearch {
         {
             // Drop the stream first
             let _ = std::mem::replace(&mut self.stream, unsafe { std::mem::zeroed() });
-            
+
             // Drop the module
             let _ = std::mem::replace(&mut self.module, unsafe { std::mem::zeroed() });
         }
@@ -201,69 +206,98 @@ impl Drop for GpuVanitySearch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_primitives::B256;
-    use crate::constants::tests::{test_deployer, TEST_SALT, TEST_NAMESPACE};
+    use crate::constants::tests::{test_deployer, TEST_NAMESPACE, TEST_SALT};
     use crate::create3::compute_create3_address;
+    use alloy_primitives::B256;
 
     #[test]
     fn test_cuda_create3_basic() {
         let gpu = GpuVanitySearch::new().expect("Failed to initialize CUDA");
-        
+
         let deployer = test_deployer();
         let initial_salt = B256::ZERO.to_vec();
-        
+
         // Test without namespace
         let result = gpu.search_with_threads(&deployer.as_slice(), "", "", &initial_salt, 1, 1);
         assert!(result.is_some(), "Should find a result");
-        
+
         let found_salt = result.unwrap();
         let found_address = compute_create3_address(deployer, B256::from_slice(&found_salt), None)
             .expect("Failed to compute address");
-        
+
         // The address should be valid
-        assert!(found_address.to_string().starts_with("0x"), "Address should start with 0x");
-        assert_eq!(found_address.to_string().len(), 42, "Address should be 42 chars long");
+        assert!(
+            found_address.to_string().starts_with("0x"),
+            "Address should start with 0x"
+        );
+        assert_eq!(
+            found_address.to_string().len(),
+            42,
+            "Address should be 42 chars long"
+        );
     }
 
     #[test]
     fn test_cuda_create3_with_namespace() {
         let gpu = GpuVanitySearch::new().expect("Failed to initialize CUDA");
-        
+
         let deployer = test_deployer();
         let initial_salt = B256::ZERO.to_vec();
-        
+
         // Test with namespace
-        let result = gpu.search_with_threads(&deployer.as_slice(), "", TEST_NAMESPACE, &initial_salt, 1, 1);
+        let result = gpu.search_with_threads(
+            &deployer.as_slice(),
+            "",
+            TEST_NAMESPACE,
+            &initial_salt,
+            1,
+            1,
+        );
         assert!(result.is_some(), "Should find a result");
-        
+
         let found_salt = result.unwrap();
-        let found_address = compute_create3_address(deployer, B256::from_slice(&found_salt), Some(TEST_NAMESPACE))
-            .expect("Failed to compute address");
-        
+        let found_address = compute_create3_address(
+            deployer,
+            B256::from_slice(&found_salt),
+            Some(TEST_NAMESPACE),
+        )
+        .expect("Failed to compute address");
+
         // The address should be valid
-        assert!(found_address.to_string().starts_with("0x"), "Address should start with 0x");
-        assert_eq!(found_address.to_string().len(), 42, "Address should be 42 chars long");
+        assert!(
+            found_address.to_string().starts_with("0x"),
+            "Address should start with 0x"
+        );
+        assert_eq!(
+            found_address.to_string().len(),
+            42,
+            "Address should be 42 chars long"
+        );
     }
 
     #[test]
     fn test_cuda_create3_prefix_matching() {
         let gpu = GpuVanitySearch::new().expect("Failed to initialize CUDA");
-        
+
         let deployer = test_deployer();
         let initial_salt = B256::ZERO.to_vec();
-        
+
         // Test with a prefix that doesn't match - should return None
         let result = gpu.search_with_threads(&deployer.as_slice(), "ffff", "", &initial_salt, 1, 1);
-        assert!(result.is_none(), "Should not find a result with non-matching prefix in single iteration");
-        
+        assert!(
+            result.is_none(),
+            "Should not find a result with non-matching prefix in single iteration"
+        );
+
         // Test with a prefix that should be findable
-        let result = gpu.search_with_threads(&deployer.as_slice(), "0", "", &initial_salt, 1, 65536);
+        let result =
+            gpu.search_with_threads(&deployer.as_slice(), "0", "", &initial_salt, 1, 65536);
         assert!(result.is_some(), "Should find a result with simple prefix");
-        
+
         let found_salt = result.unwrap();
         let found_address = compute_create3_address(deployer, B256::from_slice(&found_salt), None)
             .expect("Failed to compute address");
-        
+
         // The address should start with the prefix
         assert!(
             found_address.to_string().to_lowercase().starts_with("0x0"),
@@ -275,18 +309,22 @@ mod tests {
     #[test]
     fn test_cuda_create3_multithreaded() {
         let gpu = GpuVanitySearch::new().expect("Failed to initialize CUDA");
-        
+
         let deployer = test_deployer();
         let initial_salt = B256::ZERO.to_vec();
-        
+
         // Test with multiple threads - should find a result faster
-        let result = gpu.search_with_threads(&deployer.as_slice(), "00", "", &initial_salt, 256, 65536);
-        assert!(result.is_some(), "Should find a result with multiple threads");
-        
+        let result =
+            gpu.search_with_threads(&deployer.as_slice(), "00", "", &initial_salt, 256, 65536);
+        assert!(
+            result.is_some(),
+            "Should find a result with multiple threads"
+        );
+
         let found_salt = result.unwrap();
         let found_address = compute_create3_address(deployer, B256::from_slice(&found_salt), None)
             .expect("Failed to compute address");
-        
+
         // The address should start with the prefix
         assert!(
             found_address.to_string().to_lowercase().starts_with("0x00"),
@@ -299,11 +337,14 @@ mod tests {
     #[should_panic(expected = "Invalid hex in deployer address")]
     fn test_cuda_create3_invalid_deployer() {
         let gpu = GpuVanitySearch::new().expect("Failed to initialize CUDA");
-        
+
         // Test with invalid deployer length
         let invalid_deployer = vec![0; 19]; // Too short
-        let salt = TEST_SALT.parse::<B256>().expect("Invalid test salt").to_vec();
-        
+        let salt = TEST_SALT
+            .parse::<B256>()
+            .expect("Invalid test salt")
+            .to_vec();
+
         gpu.search_with_threads(&invalid_deployer, "", "", &salt, 1, 1);
     }
-} 
+}

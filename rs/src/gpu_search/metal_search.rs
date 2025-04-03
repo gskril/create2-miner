@@ -23,7 +23,8 @@ macro_rules! dbg_println {
 
 pub struct GpuVanitySearch {
     device: Device,
-    pipeline_state: metal::ComputePipelineState,
+    create3_pipeline_state: metal::ComputePipelineState,
+    create2_pipeline_state: Option<metal::ComputePipelineState>,
     command_queue: metal::CommandQueue,
     iterations: std::cell::Cell<u64>,
     time_taken: std::cell::Cell<f64>,
@@ -35,29 +36,64 @@ impl GpuVanitySearch {
             let device = Device::system_default()?;
             println!("Found Metal device: {}", device.name());
 
-            let shader_src = include_str!("../shader/Keccak256.metal");
-            let library =
-                match device.new_library_with_source(shader_src, &metal::CompileOptions::new()) {
-                    Ok(lib) => lib,
-                    Err(e) => {
-                        println!("Failed to create Metal library: {}", e);
-                        return None;
-                    }
-                };
-
-            let function = match library.get_function("vanity_search", None) {
-                Ok(f) => f,
+            // Initialize CREATE3 shader
+            let create3_shader_src = include_str!("../shader/CREATE3.metal");
+            let create3_library = match device
+                .new_library_with_source(create3_shader_src, &metal::CompileOptions::new())
+            {
+                Ok(lib) => lib,
                 Err(e) => {
-                    println!("Failed to get Metal function: {}", e);
+                    println!("Failed to create Metal library for CREATE3: {}", e);
                     return None;
                 }
             };
 
-            let pipeline_state = match device.new_compute_pipeline_state_with_function(&function) {
-                Ok(p) => p,
+            let create3_function = match create3_library.get_function("vanity_search", None) {
+                Ok(f) => f,
                 Err(e) => {
-                    println!("Failed to create Metal pipeline: {}", e);
+                    println!("Failed to get Metal function for CREATE3: {}", e);
                     return None;
+                }
+            };
+
+            let create3_pipeline_state =
+                match device.new_compute_pipeline_state_with_function(&create3_function) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        println!("Failed to create Metal pipeline for CREATE3: {}", e);
+                        return None;
+                    }
+                };
+
+            // Try to initialize CREATE2 shader (might not exist yet)
+            let create2_pipeline_state = {
+                let create2_shader_src = include_str!("../shader/CREATE2.metal");
+                match device
+                    .new_library_with_source(create2_shader_src, &metal::CompileOptions::new())
+                {
+                    Ok(lib) => match lib.get_function("vanity_search", None) {
+                        Ok(f) => match device.new_compute_pipeline_state_with_function(&f) {
+                            Ok(p) => {
+                                println!("Successfully initialized CREATE2 Metal shader");
+                                Some(p)
+                            }
+                            Err(e) => {
+                                println!(
+                                    "Warning: Failed to create Metal pipeline for CREATE2: {}",
+                                    e
+                                );
+                                None
+                            }
+                        },
+                        Err(e) => {
+                            println!("Warning: Failed to get Metal function for CREATE2: {}", e);
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        println!("Warning: Failed to create Metal library for CREATE2: {}", e);
+                        None
+                    }
                 }
             };
 
@@ -68,7 +104,8 @@ impl GpuVanitySearch {
 
             Some(Self {
                 device,
-                pipeline_state,
+                create3_pipeline_state,
+                create2_pipeline_state,
                 command_queue,
                 iterations: std::cell::Cell::new(0),
                 time_taken: std::cell::Cell::new(0.0),
@@ -76,7 +113,27 @@ impl GpuVanitySearch {
         })
     }
 
+    // Legacy method for backwards compatibility
     pub fn search_with_threads(
+        &self,
+        deployer: &[u8],
+        prefix: &str,
+        namespace: &str,
+        initial_salt: &[u8],
+        thread_count: u32,
+        threadgroup_count: u32,
+    ) -> Option<&[u8]> {
+        self.search_with_threads_create3(
+            deployer,
+            prefix,
+            namespace,
+            initial_salt,
+            thread_count,
+            threadgroup_count,
+        )
+    }
+
+    pub fn search_with_threads_create3(
         &self,
         deployer: &[u8],
         prefix: &str,
@@ -215,7 +272,7 @@ impl GpuVanitySearch {
             dbg_println!("GPU: Compute encoder created");
 
             // Set pipeline state and buffers
-            encoder.set_compute_pipeline_state(&self.pipeline_state);
+            encoder.set_compute_pipeline_state(&self.create3_pipeline_state);
 
             dbg_println!("GPU: Pipeline state set");
             encoder.set_buffer(0, Some(&deployer_buffer), 0);
@@ -240,6 +297,17 @@ impl GpuVanitySearch {
             let threads_per_threadgroup = metal::MTLSize::new(thread_count as u64, 1, 1);
             let threadgroups = metal::MTLSize::new(threadgroup_count as u64, 1, 1); // Much larger search space
 
+            dbg_println!("GPU: Thread groups configured");
+            dbg_println!(
+                "GPU: Max threads per threadgroup: {:?}",
+                &self
+                    .create3_pipeline_state
+                    .max_total_threads_per_threadgroup()
+            );
+            dbg_println!(
+                "GPU: Thread execution width: {:?}",
+                &self.create3_pipeline_state.thread_execution_width()
+            );
 
             // Dispatch work
             encoder.dispatch_thread_groups(threadgroups, threads_per_threadgroup);
@@ -264,8 +332,8 @@ impl GpuVanitySearch {
             let status = command_buffer.status();
             dbg_println!("GPU: Command buffer status: {:?}", status);
 
-            // let error = command_buffer.error();
-            // dbg_println!("GPU: Command buffer error: {:?}", error);
+            let error = command_buffer.error();
+            dbg_println!("GPU: Command buffer error: {:?}", error);
 
             if std::env::var("METAL_CAPTURE_ENABLED").is_ok() {
                 capture_scope.end_scope();
@@ -314,6 +382,193 @@ impl GpuVanitySearch {
                             .join(",")
                     );
                 }
+                if found {
+                    Some(salt)
+                } else {
+                    None
+                }
+            }
+        })
+    }
+
+    pub fn search_with_threads_create2(
+        &self,
+        deployer: &[u8],
+        prefix: &str,
+        bytecode_hash: &[u8],
+        initial_salt: &[u8],
+        thread_count: u32,
+        threadgroup_count: u32,
+    ) -> Option<&[u8]> {
+        // Check if CREATE2 pipeline is available
+        let create2_pipeline = match &self.create2_pipeline_state {
+            Some(pipeline) => pipeline,
+            None => {
+                panic!("CREATE2 Metal shader not available. Please ensure CREATE2.metal exists.");
+            }
+        };
+
+        autoreleasepool(|| {
+            let capture_scope =
+                CaptureManager::shared().new_capture_scope_with_device(&self.device);
+            let capture_descriptor = CaptureDescriptor::new();
+            capture_descriptor.set_capture_scope(&capture_scope);
+            capture_descriptor.set_output_url(std::path::Path::new(
+                "/Users/tate/Development/playgrounds/safe-vanity/framecapture.gputrace",
+            ));
+            capture_descriptor.set_destination(MTLCaptureDestination::GpuTraceDocument);
+            if std::env::var("METAL_CAPTURE_ENABLED").is_ok() {
+                dbg_println!("Metal capture enabled.");
+                CaptureManager::shared()
+                    .start_capture(&capture_descriptor)
+                    .expect("Failed to start capture");
+                capture_scope.begin_scope();
+            }
+
+            // Convert deployer address to bytes
+            let deployer_bytes = if deployer.len() == 20 {
+                deployer.to_vec()
+            } else {
+                // Assume it's a hex string with 0x prefix
+                let hex_str = std::str::from_utf8(deployer)
+                    .expect("Invalid deployer address")
+                    .trim_start_matches("0x");
+                hex::decode(hex_str).expect("Invalid hex in deployer address")
+            };
+
+            // Convert prefix string to individual hex values (0-15)
+            let prefix_bytes: Vec<u8> = prefix
+                .chars()
+                .map(|c| c.to_digit(16).unwrap() as u8)
+                .collect();
+
+            dbg_println!("GPU: Searching for prefix bytes: {:?}", prefix_bytes);
+            dbg_println!("GPU: Bytecode hash: {:02x?}", bytecode_hash);
+            dbg_println!("GPU: Prefix length: {}", prefix_bytes.len());
+            dbg_println!("GPU: Deployer bytes: {:?}", deployer_bytes);
+            dbg_println!("GPU: Initial salt: {:?}", initial_salt);
+
+            // Create buffers
+            let deployer_buffer = self.device.new_buffer_with_data(
+                deployer_bytes.as_ptr() as *const _,
+                deployer_bytes.len() as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+
+            let prefix_buffer = self.device.new_buffer_with_data(
+                prefix_bytes.as_ptr() as *const _,
+                prefix_bytes.len() as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+
+            // Note: prefix_len is now the number of bytes, not characters
+            let prefix_len = prefix_bytes.len() as u32;
+            let prefix_len_buffer = self.device.new_buffer_with_data(
+                &prefix_len as *const u32 as *const _,
+                std::mem::size_of::<u32>() as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+
+            // Bytecode hash buffer
+            let bytecode_hash_buffer = self.device.new_buffer_with_data(
+                bytecode_hash.as_ptr() as *const _,
+                bytecode_hash.len() as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+
+            let initial_salt_buffer = self.device.new_buffer_with_data(
+                initial_salt.as_ptr() as *const _,
+                initial_salt.len() as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+
+            let result_buffer = self.device.new_buffer(
+                std::mem::size_of::<u64>() as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+
+            let found_buffer = self.device.new_buffer(
+                std::mem::size_of::<bool>() as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+
+            // Initialize found buffer to false
+            unsafe {
+                *(found_buffer.contents() as *mut bool) = false;
+            }
+
+            // Create command buffer
+            let command_buffer = self.command_queue.new_command_buffer();
+
+            // Create compute encoder
+            let compute_encoder = Some(command_buffer.new_compute_command_encoder());
+            let encoder = compute_encoder.as_ref().unwrap();
+
+            // Set pipeline state and buffers
+            encoder.set_compute_pipeline_state(create2_pipeline);
+            encoder.set_buffer(0, Some(&deployer_buffer), 0);
+            encoder.set_buffer(1, Some(&prefix_buffer), 0);
+            encoder.set_buffer(2, Some(&prefix_len_buffer), 0);
+            encoder.set_buffer(3, Some(&bytecode_hash_buffer), 0);
+            encoder.set_buffer(4, Some(&initial_salt_buffer), 0);
+            encoder.set_buffer(5, Some(&result_buffer), 0);
+            encoder.set_buffer(6, Some(&found_buffer), 0);
+
+            // Configure thread groups
+            let threads_per_threadgroup = metal::MTLSize::new(thread_count as u64, 1, 1);
+            let threadgroups = metal::MTLSize::new(threadgroup_count as u64, 1, 1);
+
+            dbg_println!(
+                "GPU: Max threads per threadgroup: {:?}",
+                &create2_pipeline.max_total_threads_per_threadgroup()
+            );
+            dbg_println!(
+                "GPU: Thread execution width: {:?}",
+                &create2_pipeline.thread_execution_width()
+            );
+
+            // Dispatch work
+            encoder.dispatch_thread_groups(threadgroups, threads_per_threadgroup);
+            encoder.end_encoding();
+
+            let start_time = std::time::Instant::now();
+            command_buffer.commit();
+            command_buffer.wait_until_completed();
+
+            let end_time = std::time::Instant::now();
+            let duration = end_time.duration_since(start_time);
+            self.time_taken
+                .set(self.time_taken.get() + duration.as_secs_f64());
+
+            if std::env::var("METAL_CAPTURE_ENABLED").is_ok() {
+                capture_scope.end_scope();
+            }
+
+            // Get result and debug info
+            unsafe {
+                let found = *(found_buffer.contents() as *const bool);
+                let salt = std::slice::from_raw_parts(result_buffer.contents() as *const u8, 32);
+                self.iterations.set(
+                    self.iterations.get() + (thread_count as u64) * (threadgroup_count as u64),
+                );
+                let iterations_per_second = (self.iterations.get() as f64) / self.time_taken.get();
+                println!(
+                    "GPU: Iterations per second: {}",
+                    (iterations_per_second as u64)
+                        .to_string()
+                        .chars()
+                        .rev()
+                        .collect::<Vec<_>>()
+                        .chunks(3)
+                        .map(|chunk| chunk.iter().collect::<String>())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                        .chars()
+                        .rev()
+                        .collect::<String>()
+                );
+                println!("GPU: Total time taken: {:?}s", self.time_taken.get());
+
                 if found {
                     Some(salt)
                 } else {

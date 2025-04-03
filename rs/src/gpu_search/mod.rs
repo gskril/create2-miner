@@ -31,7 +31,7 @@ impl GpuVanitySearch {
                 metal_search: None,
                 cuda_search: Some(cuda_search),
             });
-        } 
+        }
         #[cfg(feature = "metal")]
         {
             if let Some(metal_search) = metal_search::GpuVanitySearch::new() {
@@ -83,7 +83,27 @@ impl GpuVanitySearch {
         }
     }
 
+    // Legacy wrapper for CREATE3 compatibility
     pub fn search(
+        &self,
+        deployer: &[u8],
+        prefix: &str,
+        namespace: &str,
+        initial_salt: &[u8],
+        threads: Option<u32>,
+        thread_groups: Option<u32>,
+    ) -> Option<Vec<u8>> {
+        self.search_create3(
+            deployer,
+            prefix,
+            namespace,
+            initial_salt,
+            threads,
+            thread_groups,
+        )
+    }
+
+    pub fn search_create3(
         &self,
         deployer: &[u8],
         prefix: &str,
@@ -97,33 +117,81 @@ impl GpuVanitySearch {
             GpuBackend::Cuda => {
                 let threads = threads.unwrap_or(256);
                 let thread_groups = thread_groups.unwrap_or(65536);
-                self.cuda_search
-                    .as_ref()
-                    .and_then(|cs| cs.search_with_threads(
+                self.cuda_search.as_ref().and_then(|cs| {
+                    cs.search_with_threads_create3(
                         deployer,
                         prefix,
                         namespace,
                         initial_salt,
                         threads,
                         thread_groups,
-                    ))
+                    )
+                })
             }
             #[cfg(feature = "metal")]
             GpuBackend::Metal => {
-                let threads = threads.unwrap_or(32);
+                let threads = threads.unwrap_or(64);
                 let thread_groups = thread_groups.unwrap_or(65536);
                 self.metal_search
                     .as_ref()
-                    .and_then(|ms| ms.search_with_threads(
-                        deployer,
-                        prefix,
-                        namespace,
-                        initial_salt,
-                        threads,
-                        thread_groups,
-                    ))
+                    .and_then(|ms| {
+                        ms.search_with_threads_create3(
+                            deployer,
+                            prefix,
+                            namespace,
+                            initial_salt,
+                            threads,
+                            thread_groups,
+                        )
+                    })
                     .map(|salt| salt.to_vec())
             }
         }
     }
-} 
+
+    pub fn search_create2(
+        &self,
+        deployer: &[u8],
+        prefix: &str,
+        bytecode_hash: &[u8],
+        initial_salt: &[u8],
+        threads: Option<u32>,
+        thread_groups: Option<u32>,
+    ) -> Option<Vec<u8>> {
+        match self.backend {
+            #[cfg(feature = "cuda")]
+            GpuBackend::Cuda => {
+                let threads = threads.unwrap_or(256);
+                let thread_groups = thread_groups.unwrap_or(65536);
+                self.cuda_search.as_ref().and_then(|cs| {
+                    cs.search_with_threads_create2(
+                        deployer,
+                        prefix,
+                        bytecode_hash,
+                        initial_salt,
+                        threads,
+                        thread_groups,
+                    )
+                })
+            }
+            #[cfg(feature = "metal")]
+            GpuBackend::Metal => {
+                let threads = threads.unwrap_or(64);
+                let thread_groups = thread_groups.unwrap_or(65536);
+                self.metal_search
+                    .as_ref()
+                    .and_then(|ms| {
+                        ms.search_with_threads_create2(
+                            deployer,
+                            prefix,
+                            bytecode_hash,
+                            initial_salt,
+                            threads,
+                            thread_groups,
+                        )
+                    })
+                    .map(|salt| salt.to_vec())
+            }
+        }
+    }
+}

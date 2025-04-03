@@ -1122,7 +1122,7 @@ pub fn test_shader() {
         let device = Device::system_default().unwrap();
         println!("Found Metal device: {}", device.name());
 
-        let shader_src = include_str!("shader/Keccak256.metal");
+        let shader_src = include_str!("shader/CREATE3.metal");
         let library = device
             .new_library_with_source(shader_src, &metal::CompileOptions::new())
             .unwrap();

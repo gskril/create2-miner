@@ -5,6 +5,7 @@ use crate::constants::{create3_factory, FACTORY_BYTECODE};
 
 /// Compute CREATE2 address according to EIP-1014
 pub fn compute_create2_address(deployer: Address, salt: B256, bytecode_hash: B256) -> Address {
+    // let init_code_hash = keccak256(bytecode);
 
     // keccak256(0xff ++ deployer ++ salt ++ keccak256(bytecode))[12:]
     let mut input = Vec::with_capacity(1 + 20 + 32 + 32);
@@ -50,9 +51,8 @@ pub fn compute_create3_address(
 
     // Compute proxy address using CREATE2
     let factory = create3_factory();
-    let bytecode = hex::decode(&FACTORY_BYTECODE[2..]).expect("Invalid bytecode hex");
-    let bytecode_hash = keccak256(&bytecode);
-    let proxy_address = compute_create2_address(factory, namespaced_salt, bytecode_hash);
+    let bytecode = keccak256(hex::decode(&FACTORY_BYTECODE[2..]).expect("Invalid bytecode hex"));
+    let proxy_address = compute_create2_address(factory, namespaced_salt, bytecode);
 
     // Finally compute the contract address that will be deployed by the proxy
     // This follows the RLP encoding rules for contract addresses created by CREATE
@@ -88,9 +88,10 @@ mod tests {
         let deployer = create3_factory();
         let salt_bytes = keccak256(b"test_salt").to_vec();
         let salt = B256::from_slice(&salt_bytes);
-        let bytecode = hex::decode(&FACTORY_BYTECODE[2..]).expect("Invalid bytecode hex");
+        let bytecode =
+            keccak256(hex::decode(&FACTORY_BYTECODE[2..]).expect("Invalid bytecode hex"));
 
-        let address = compute_create2_address(deployer, salt, &bytecode);
+        let address = compute_create2_address(deployer, salt, bytecode);
 
         // Address should be 20 bytes (40 hex chars without 0x prefix)
         assert_eq!(format!("{:x}", address).len(), 40);
