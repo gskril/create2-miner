@@ -1,15 +1,8 @@
-# safe-vanity
-
-To install dependencies:
-
 ```bash
-bun install
+cd rs
+
+export FACTORY="0x13b0D85CcB8bf860b6b79AF3029fCA081AE9beF2"
+export INIT_CODE_HASH="<HASH_OF_YOUR_CONTRACT_INIT_CODE_GOES_HERE>"
+export PREFIX=00000000
+cargo run -- create2 $FACTORY $INIT_CODE_HASH $PREFIX --gpu.threads 256 --gpu.thread-groups 131072
 ```
-
-To run:
-
-```bash
-bun run index.ts
-```
-
-This project was created using `bun init` in bun v1.1.16. [Bun](https://bun.sh) is a fast all-in-one JavaScript runtime.
